@@ -89,7 +89,6 @@ export async function analyzeReviewSentiment(
 				// Analyze overall sentiment
 				const [sentimentResult] = await client.analyzeSentiment({ document });
 				const sentiment = sentimentResult.documentSentiment;
-				console.log(sentiment);
 
 				// Track aspect-related terms to find food, service and value sentiment
 				const foodTerms = [
