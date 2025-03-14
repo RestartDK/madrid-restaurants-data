@@ -1,4 +1,9 @@
 import * as fs from "fs";
+import path from "path";
+
+/*
+ * Helper functions for handling CSVs in JS 
+ */
 
 function parseCSVLine(line: string): string[] {
 	const result: string[] = [];
@@ -84,3 +89,51 @@ export function readFromCSV<T>(filename: string): T[] {
 
 	return data;
 }
+
+// Function to write data to CSV
+export function writeToCSV<T extends Record<string, any>>(
+	data: T[],
+	filename: string
+): void {
+	if (data.length === 0) {
+		console.log(`No data to write to ${filename}`);
+		return;
+	}
+
+	// Create headers from the first object's keys
+	const headers = Object.keys(data[0]).join(",");
+
+	// Convert each object to a CSV row
+	const rows = data.map((item) => {
+		return Object.values(item)
+			.map((value) => {
+				// If the value is a string that might contain commas, wrap it in quotes
+				if (
+					typeof value === "string" &&
+					(value.includes(",") || value.includes('"') || value.includes("\n"))
+				) {
+					return `"${value.replace(/"/g, '""')}"`;
+				}
+				return value;
+			})
+			.join(",");
+	});
+
+	// Combine headers and rows
+	const csv = [headers, ...rows].join("\n");
+
+	// Ensure the directory exists
+	const dir = path.dirname(filename);
+	if (!fs.existsSync(dir)) {
+		fs.mkdirSync(dir, { recursive: true });
+	}
+
+	// Write to file
+	fs.writeFileSync(filename, csv);
+	console.log(`Data written to ${filename}`);
+}
+
+
+/*
+ * Helper functions for converting google maps objects to custom types
+ */
