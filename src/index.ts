@@ -3,6 +3,7 @@ import * as fs from "fs";
 import { writeToCSV, readFromCSV } from "./utils";
 import { analyzeReviewSentiment } from "./sentiment";
 import { collectRestaurantsInMadrid } from "./places";
+import { Restaurant, Rating, ReviewSentiment } from "./types";
 
 // Load environment variables
 dotenv.config();
@@ -23,31 +24,41 @@ if (!NLP_API_KEY) {
  */
 async function main() {
 	try {
-		// Create data directory if it doesn't exist
-		if (!fs.existsSync("./data")) {
-			fs.mkdirSync("./data");
-		}
-
-		// Since we've already validated API keys exist, we can safely assert they're not undefined
 		const placesApiKey = PLACES_API_KEY as string;
 		const nlpApiKey = NLP_API_KEY as string;
 
-		// Collect real restaurant data and reviews from Madrid
-		console.log("Collecting restaurant data from Madrid...");
-		const { restaurants, reviews } = await collectRestaurantsInMadrid(placesApiKey, 5); // Start with 5 restaurants for testing
+		// Target number of restaurants to collect
+		const targetCount = 500; // Change this to your desired count (e.g., 500)
 		
-		console.log(`Collected ${restaurants.length} restaurants with ${reviews.length} reviews.`);
+		console.log(`Starting collection process with target of ${targetCount} restaurants...`);
+		const { restaurants, reviews, newlyCollected } = await collectRestaurantsInMadrid(
+			placesApiKey,
+			targetCount
+		);
+	
+		console.log(`Collection complete: ${restaurants.length} total restaurants (${newlyCollected.restaurants} newly collected)`);
 		
-		// Write data to CSV files
-		writeToCSV(restaurants, './data/restaurants.csv');
-		writeToCSV(reviews, './data/ratings.csv');
-
-		// Add sentiment analysis
-		console.log("Analyzing sentiment in reviews...");
-		const sentimentResults = await analyzeReviewSentiment(reviews, nlpApiKey);
-		writeToCSV(sentimentResults, "./data/review_sentiment.csv");
-
-		console.log(`Analyzed sentiment for ${sentimentResults.length} reviews.`);
+		// Only analyze sentiment for newly collected reviews to save time and API costs
+		if (newlyCollected.reviews > 0) {
+			console.log(`Analyzing sentiment for ${newlyCollected.reviews} new reviews...`);
+			
+			// Extract just the newly collected reviews for sentiment analysis
+			const newReviews = reviews.slice(reviews.length - newlyCollected.reviews);
+			const sentimentResults = await analyzeReviewSentiment(newReviews, nlpApiKey);
+			
+			// Append new sentiment results to existing file or create new one
+			if (fs.existsSync('./data/review_sentiment.csv')) {
+				const existingSentiment = readFromCSV<ReviewSentiment>('./data/review_sentiment.csv');
+				writeToCSV([...existingSentiment, ...sentimentResults], './data/review_sentiment.csv');
+			} else {
+				writeToCSV(sentimentResults, './data/review_sentiment.csv');
+			}
+			
+			console.log(`Analyzed sentiment for ${sentimentResults.length} reviews`);
+		} else {
+			console.log('No new reviews to analyze');
+		}
+		
 		console.log("Data collection and analysis complete!");
 	} catch (error) {
 		console.error("Application error:", error);

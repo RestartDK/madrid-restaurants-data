@@ -1,6 +1,8 @@
 import { PlacesClient } from "@googlemaps/places";
 import type { google } from "@googlemaps/places/build/protos/protos";
 import { Rating, Restaurant } from "./types";
+import * as fs from "fs";
+import { readFromCSV, writeToCSV } from "./utils";
 
 /**
  * Convert Google Places object to Restaurant type
@@ -181,13 +183,53 @@ export function extractReviews(place: google.maps.places.v1.IPlace): Rating[] {
 }
 
 /**
- * Collect restaurant data from Madrid
+ * Collect restaurant data from Madrid with automatic incremental collection
  */
 export async function collectRestaurantsInMadrid(
 	apiKey: string,
-	count: number = 50
-): Promise<{ restaurants: Restaurant[]; reviews: Rating[] }> {
-	console.log(`Searching for restaurants in Madrid...`);
+	targetCount: number = 50,
+	dataDir: string = './data',
+	existingIds?: Set<string>
+): Promise<{ restaurants: Restaurant[]; reviews: Rating[]; newlyCollected: { restaurants: number, reviews: number } }> {
+	// Create data directory if it doesn't exist
+	if (!fs.existsSync(dataDir)) {
+		fs.mkdirSync(dataDir);
+	}
+	
+	// Load existing data if not provided
+	let existingRestaurants: Restaurant[] = [];
+	let existingReviews: Rating[] = [];
+	
+	if (!existingIds) {
+		// Check if we have existing data files
+		if (fs.existsSync(`${dataDir}/restaurants.csv`)) {
+			existingRestaurants = readFromCSV<Restaurant>(`${dataDir}/restaurants.csv`);
+			console.log(`Loaded ${existingRestaurants.length} existing restaurants`);
+		}
+		
+		if (fs.existsSync(`${dataDir}/ratings.csv`)) {
+			existingReviews = readFromCSV<Rating>(`${dataDir}/ratings.csv`);
+			console.log(`Loaded ${existingReviews.length} existing reviews`);
+		}
+		
+		// Extract existing IDs
+		existingIds = new Set(existingRestaurants.map(r => r.restaurant_id));
+	}
+	
+	// Calculate how many more restaurants we need
+	const remainingCount = Math.max(0, targetCount - existingRestaurants.length);
+	
+	if (remainingCount <= 0) {
+		console.log(`Already have ${existingRestaurants.length} restaurants, which meets or exceeds the target of ${targetCount}`);
+		return { 
+			restaurants: existingRestaurants, 
+			reviews: existingReviews,
+			newlyCollected: { restaurants: 0, reviews: 0 }
+		};
+	}
+	
+	console.log(`Searching for restaurants in Madrid (target: ${targetCount}, need ${remainingCount} more)...`);
+	console.log(`Already have ${existingIds.size} existing restaurant IDs to avoid duplicates`);
 
 	// Create location bias for Madrid
 	const madridLocation = {
@@ -200,58 +242,104 @@ export async function collectRestaurantsInMadrid(
 		},
 	};
 
-	// We'll make multiple queries to get different types of restaurants
+	// Expanded list of queries to get more diverse results
 	const queries = [
 		"best restaurants Madrid",
 		"popular restaurants Madrid",
-		// "spanish restaurants Madrid",
-		// "tapas Madrid",
-		// "fine dining Madrid",
-		// "paella Madrid",
-		// "seafood Madrid",
-		// "steakhouse Madrid",
-		// "italian Madrid",
-		// "asian Madrid"
+		"spanish restaurants Madrid",
+		"tapas Madrid",
+		"fine dining Madrid",
+		"paella Madrid",
+		"seafood Madrid",
+		"steakhouse Madrid",
+		"italian Madrid",
+		"asian Madrid",
+		"michelin star Madrid",
+		"authentic Madrid",
+		"cheap eats Madrid",
+		"brunch Madrid",
+		"vegetarian Madrid",
+		"chinese Madrid",
+		"japanese Madrid",
+		"indian Madrid",
+		"mexican Madrid",
+		"mediterranean Madrid",
+		"restaurants Salamanca Madrid",
+		"restaurants Malasaña Madrid",
+		"restaurants Chueca Madrid",
+		"restaurants La Latina Madrid",
+		"restaurants Retiro Madrid"
 	];
 
-	const allRestaurants: Restaurant[] = [];
-	const allReviews: Rating[] = [];
-	const seenIds = new Set<string>();
+	// Initialize seenIds with existing IDs to avoid duplicates
+	const seenIds = new Set<string>(existingIds);
+	const newRestaurants: Restaurant[] = [];
+	const newReviews: Rating[] = [];
 
+	// Process each query until we reach the target count
 	for (const query of queries) {
-		if (allRestaurants.length >= count) break;
+		if (newRestaurants.length >= remainingCount) break;
 
-		console.log(`Searching for: ${query}`);
-		const searchResults = await searchPlaces(query, apiKey, madridLocation);
+		console.log(`Searching for: "${query}" (current count: ${newRestaurants.length}/${remainingCount})`);
+		
+		try {
+			const searchResults = await searchPlaces(query, apiKey, madridLocation);
+			console.log(`Found ${searchResults.length} results for query "${query}"`);
+			
+			// Process each place found
+			for (const place of searchResults) {
+				if (newRestaurants.length >= remainingCount) break;
 
-		for (const place of searchResults) {
-			if (allRestaurants.length >= count) break;
+				const placeId = place.id || place.name?.split("/").pop();
+				if (!placeId || seenIds.has(placeId)) continue;
 
-			const placeId = place.id || place.name?.split("/").pop();
-			if (!placeId || seenIds.has(placeId)) continue;
+				try {
+					console.log(`Fetching details for: ${place.displayName?.text} (${newRestaurants.length + 1}/${remainingCount})`);
+					const placeDetails = await fetchPlaceInfo(placeId, apiKey);
+					const restaurant = convertToRestaurant(placeDetails);
+					const reviews = extractReviews(placeDetails);
 
-			try {
-				console.log(`Fetching details for: ${place.displayName?.text}`);
-				const placeDetails = await fetchPlaceInfo(placeId, apiKey);
-				const restaurant = convertToRestaurant(placeDetails);
-				const reviews = extractReviews(placeDetails);
+					newRestaurants.push(restaurant);
+					newReviews.push(...reviews);
+					seenIds.add(placeId);
 
-				allRestaurants.push(restaurant);
-				allReviews.push(...reviews);
-				seenIds.add(placeId);
+					console.log(`Found ${reviews.length} reviews for ${restaurant.name}`);
 
-				console.log(`Found ${reviews.length} reviews for ${restaurant.name}`);
-
-				// Add a small delay to avoid hitting API rate limits
-				await new Promise((resolve) => setTimeout(resolve, 300));
-			} catch (error) {
-				console.error(
-					`Error fetching details for ${place.displayName?.text}:`,
-					error
-				);
+					// Add a small delay to avoid hitting API rate limits
+					await new Promise((resolve) => setTimeout(resolve, 300));
+				} catch (error) {
+					console.error(`Error fetching details for ${place.displayName?.text}:`, error);
+				}
 			}
+			
+			// Add a delay between queries to avoid rate limits
+			await new Promise((resolve) => setTimeout(resolve, 500));
+			
+		} catch (error) {
+			console.error(`Error with query "${query}":`, error);
+			// Wait longer if we hit an error (might be rate limiting)
+			await new Promise((resolve) => setTimeout(resolve, 2000));
 		}
 	}
 
-	return { restaurants: allRestaurants, reviews: allReviews };
+	console.log(`Completed search with ${newRestaurants.length} new unique restaurants.`);
+	
+	// Combine with existing data
+	const allRestaurants = [...existingRestaurants, ...newRestaurants];
+	const allReviews = [...existingReviews, ...newReviews];
+	
+	// Save the combined data
+	writeToCSV(allRestaurants, `${dataDir}/restaurants.csv`);
+	writeToCSV(allReviews, `${dataDir}/ratings.csv`);
+	
+	console.log(`Total: ${allRestaurants.length} restaurants with ${allReviews.length} reviews`);
+	
+	return { 
+		restaurants: allRestaurants, 
+		reviews: allReviews,
+		newlyCollected: {
+			restaurants: newRestaurants.length,
+			reviews: newReviews.length
+		}
+	};
 }
