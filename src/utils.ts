@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { parse } from 'csv-parse/sync';
 import { stringify } from 'csv-stringify/sync';
-import { Rating } from "./types";
+import { Rating, ReviewSentiment } from "./types";
 
 /**
  * Read data from a CSV file and convert to objects
@@ -59,7 +59,7 @@ export function writeToCSV<T extends Record<string, any>>(
 /**
  * Reassign user IDs to make them unique across all ratings
  */
-function reassignUserIds(ratings: Rating[]): Rating[] {
+export function reassignUserIds(ratings: Rating[]): Rating[] {
 	// Create a mapping from original composite keys to new unique IDs
 	const userMap = new Map<string, number>();
 	let nextUserId = 1;
@@ -86,4 +86,77 @@ function reassignUserIds(ratings: Rating[]): Rating[] {
 	
 	console.log(`Reassigned ${ratings.length} ratings to ${userMap.size} unique users`);
 	return updatedRatings;
+}
+
+/**
+ * Reassign reviewSentiment IDs to make them unique
+ */
+export function reassignReviewSentimentIds(
+    sentimentReviews: ReviewSentiment[],
+    oldRatings: Rating[],
+    newRatings: Rating[]
+): ReviewSentiment[] {
+    // Create a mapping for new unique review IDs
+    const reviewMap = new Map<string, string>();
+    let nextReviewId = 1;
+
+    // Create a mapping of old_user_id + restaurant_id -> new global user_id
+    const newUserMapping = new Map<string, number>();
+    oldRatings.forEach(oldRating => {
+        const matchingNewRating = newRatings.find(
+            newRating => 
+                newRating.restaurant_id === oldRating.restaurant_id && 
+                newRating.review_text === oldRating.review_text
+        );
+        if (matchingNewRating) {
+            const key = `${oldRating.user_id}_${oldRating.restaurant_id}`;
+            newUserMapping.set(key, matchingNewRating.user_id);
+        }
+    });
+
+    return sentimentReviews.map(sentiment => {
+        // The current review_id is in format: <old_user_id>_<restaurant_id>
+        const [relativeUserId, restaurantId] = sentiment.review_id.split('_');
+        
+        // Get the new global user ID using the old ID + restaurant combination
+        const key = `${relativeUserId}_${restaurantId}`;
+        const globalUserId = newUserMapping.get(key) || 0;
+
+        // Create a unique review ID if we haven't seen this review
+        if (!reviewMap.has(key)) {
+            reviewMap.set(key, `${nextReviewId++}`);
+        }
+
+        return {
+            ...sentiment,
+						restaurant_id: restaurantId,
+            user_id: globalUserId,                      // The new global user ID
+            review_id: reviewMap.get(key)!              // New unique review ID
+        };
+    });
+}
+
+/**
+ * Remove rows where user_id or review_id is 0
+ */
+export function cleanInvalidIds<T extends { user_id?: number, review_id?: string }>(
+    data: T[],
+    type: 'ratings' | 'sentiment'
+): T[] {
+    const originalCount = data.length;
+    let cleanedData: T[];
+
+    if (type === 'ratings') {
+        cleanedData = data.filter(item => item.user_id !== 0);
+        console.log(`Removed ${originalCount - cleanedData.length} ratings with user_id = 0`);
+    } else {
+        cleanedData = data.filter(item => {
+            const hasValidUserId = item.user_id !== 0;
+            const hasValidReviewId = item.review_id !== '0' && item.review_id !== undefined;
+            return hasValidUserId && hasValidReviewId;
+        });
+        console.log(`Removed ${originalCount - cleanedData.length} sentiment reviews with invalid IDs`);
+    }
+
+    return cleanedData;
 }
