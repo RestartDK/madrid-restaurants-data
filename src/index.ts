@@ -3,7 +3,7 @@ import * as fs from "fs";
 import { writeToCSV, readFromCSV } from "./utils";
 import { analyzeReviewSentiment } from "./sentiment";
 import { collectRestaurantsInMadrid } from "./places";
-import { Restaurant, Rating, ReviewSentiment } from "./types";
+import { ReviewSentiment } from "./types";
 
 // Load environment variables
 dotenv.config();

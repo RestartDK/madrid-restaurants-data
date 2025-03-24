@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { parse } from 'csv-parse/sync';
 import { stringify } from 'csv-stringify/sync';
+import { Rating } from "./types";
 
 /**
  * Read data from a CSV file and convert to objects
@@ -53,4 +54,36 @@ export function writeToCSV<T extends Record<string, any>>(
 	// Write to file
 	fs.writeFileSync(filename, csvString);
 	console.log(`Data written to ${filename}`);
+}
+
+/**
+ * Reassign user IDs to make them unique across all ratings
+ */
+function reassignUserIds(ratings: Rating[]): Rating[] {
+	// Create a mapping from original composite keys to new unique IDs
+	const userMap = new Map<string, number>();
+	let nextUserId = 1;
+	
+	// Create a copy of the ratings with updated user IDs
+	const updatedRatings = ratings.map(rating => {
+		// Create a composite key using source_user_name and restaurant_id
+		const compositeKey = rating.source_user_name;
+		
+		// If we haven't seen this user before, assign a new ID
+		if (!userMap.has(compositeKey)) {
+			userMap.set(compositeKey, nextUserId++);
+		}
+
+		console.log(rating);
+		console.log(userMap);
+		
+		// Return a new rating object with the updated user_id
+		return {
+			...rating,
+			user_id: userMap.get(compositeKey)!
+		};
+	});
+	
+	console.log(`Reassigned ${ratings.length} ratings to ${userMap.size} unique users`);
+	return updatedRatings;
 }
