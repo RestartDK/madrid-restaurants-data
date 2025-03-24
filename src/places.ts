@@ -85,7 +85,6 @@ export async function fetchPlaceInfo(
 		"location",
 		"rating",
 		"primaryTypeDisplayName",
-		"priceLevel",
 		"dineIn",
 		"takeout",
 		"delivery",
