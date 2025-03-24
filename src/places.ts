@@ -125,7 +125,11 @@ export async function fetchPlaceInfo(
 /**
  * Extract review data from a place
  */
-export function extractReviews(place: google.maps.places.v1.IPlace): Rating[] {
+export function extractReviews(
+	place: google.maps.places.v1.IPlace,
+	counter: number,
+	userNameMap: Map<string, number>
+): Rating[] {
 	const restaurant_id = place.id || place.name?.split("/").pop() || "";
 	const reviews: Rating[] = [];
 
@@ -133,35 +137,40 @@ export function extractReviews(place: google.maps.places.v1.IPlace): Rating[] {
 		return reviews;
 	}
 
-	// Use a counter as user_id since we don't have real user accounts
-	let counter = 1;
-
 	place.reviews.forEach((review) => {
 		if (!review) return;
 
 		// Since the Google Places API types are causing issues, we'll use any
 		// to handle the review data safely
-		const reviewAny = review;
 
 		// Extract data with safety checks
 		const authorName =
-			reviewAny.authorAttribution?.displayName ||
-			reviewAny.authorAttribution?.displayName ||
+			review.authorAttribution?.displayName ||
+			review.authorAttribution?.displayName ||
 			"Anonymous";
 
-		const reviewRating = reviewAny.rating || 0;
+		// Get existing user ID or create new one
+		let userId: number;
+		if (userNameMap.has(authorName)) {
+			userId = userNameMap.get(authorName)!;
+		} else {
+			userId = counter++;
+			userNameMap.set(authorName, userId);
+		}
 
-		const reviewText = reviewAny.text?.text || reviewAny.text || "";
+		const reviewRating = review.rating || 0;
+
+		const reviewText = review.text?.text || review.text || "";
 
 		// Use current date as fallback
 		let dateStr = new Date().toISOString();
 
-		if (reviewAny.publishTime) {
-			if (typeof reviewAny.publishTime === "string") {
-				dateStr = reviewAny.publishTime;
-			} else if (reviewAny.publishTime.seconds) {
+		if (review.publishTime) {
+			if (typeof review.publishTime === "string") {
+				dateStr = review.publishTime;
+			} else if (review.publishTime.seconds) {
 				// Convert timestamp to milliseconds
-				const millis = Number(reviewAny.publishTime.seconds) * 1000;
+				const millis = Number(review.publishTime.seconds) * 1000;
 				dateStr = new Date(millis).toISOString();
 			}
 		}
@@ -170,7 +179,7 @@ export function extractReviews(place: google.maps.places.v1.IPlace): Rating[] {
 		const date = dateStr.split("T")[0];
 
 		reviews.push({
-			user_id: counter++,
+			user_id: userId,
 			restaurant_id,
 			rating: reviewRating,
 			review_text: reviewText.toString(),
@@ -188,48 +197,60 @@ export function extractReviews(place: google.maps.places.v1.IPlace): Rating[] {
 export async function collectRestaurantsInMadrid(
 	apiKey: string,
 	targetCount: number = 50,
-	dataDir: string = './data',
+	dataDir: string = "./data",
 	existingIds?: Set<string>
-): Promise<{ restaurants: Restaurant[]; reviews: Rating[]; newlyCollected: { restaurants: number, reviews: number } }> {
+): Promise<{
+	restaurants: Restaurant[];
+	reviews: Rating[];
+	newlyCollected: { restaurants: number; reviews: number };
+}> {
 	// Create data directory if it doesn't exist
 	if (!fs.existsSync(dataDir)) {
 		fs.mkdirSync(dataDir);
 	}
-	
+
 	// Load existing data if not provided
 	let existingRestaurants: Restaurant[] = [];
 	let existingReviews: Rating[] = [];
-	
+
 	if (!existingIds) {
 		// Check if we have existing data files
 		if (fs.existsSync(`${dataDir}/restaurants.csv`)) {
-			existingRestaurants = readFromCSV<Restaurant>(`${dataDir}/restaurants.csv`);
+			existingRestaurants = readFromCSV<Restaurant>(
+				`${dataDir}/restaurants.csv`
+			);
 			console.log(`Loaded ${existingRestaurants.length} existing restaurants`);
 		}
-		
+
 		if (fs.existsSync(`${dataDir}/ratings.csv`)) {
 			existingReviews = readFromCSV<Rating>(`${dataDir}/ratings.csv`);
 			console.log(`Loaded ${existingReviews.length} existing reviews`);
 		}
-		
+
 		// Extract existing IDs
-		existingIds = new Set(existingRestaurants.map(r => r.restaurant_id));
+		existingIds = new Set(existingRestaurants.map((r) => r.restaurant_id));
 	}
-	
+
 	// Calculate how many more restaurants we need
 	const remainingCount = Math.max(0, targetCount - existingRestaurants.length);
-	
+
 	if (remainingCount <= 0) {
-		console.log(`Already have ${existingRestaurants.length} restaurants, which meets or exceeds the target of ${targetCount}`);
-		return { 
-			restaurants: existingRestaurants, 
+		console.log(
+			`Already have ${existingRestaurants.length} restaurants, which meets or exceeds the target of ${targetCount}`
+		);
+		return {
+			restaurants: existingRestaurants,
 			reviews: existingReviews,
-			newlyCollected: { restaurants: 0, reviews: 0 }
+			newlyCollected: { restaurants: 0, reviews: 0 },
 		};
 	}
-	
-	console.log(`Searching for restaurants in Madrid (target: ${targetCount}, need ${remainingCount} more)...`);
-	console.log(`Already have ${existingIds.size} existing restaurant IDs to avoid duplicates`);
+
+	console.log(
+		`Searching for restaurants in Madrid (target: ${targetCount}, need ${remainingCount} more)...`
+	);
+	console.log(
+		`Already have ${existingIds.size} existing restaurant IDs to avoid duplicates`
+	);
 
 	// Create location bias for Madrid
 	const madridLocation = {
@@ -268,11 +289,13 @@ export async function collectRestaurantsInMadrid(
 		"restaurants Malasaña Madrid",
 		"restaurants Chueca Madrid",
 		"restaurants La Latina Madrid",
-		"restaurants Retiro Madrid"
+		"restaurants Retiro Madrid",
 	];
 
 	// Initialize seenIds with existing IDs to avoid duplicates
 	const seenIds = new Set<string>(existingIds);
+	let userCounter = 1;
+	const userNameMap = new Map<string, number>();
 	const newRestaurants: Restaurant[] = [];
 	const newReviews: Rating[] = [];
 
@@ -280,12 +303,14 @@ export async function collectRestaurantsInMadrid(
 	for (const query of queries) {
 		if (newRestaurants.length >= remainingCount) break;
 
-		console.log(`Searching for: "${query}" (current count: ${newRestaurants.length}/${remainingCount})`);
-		
+		console.log(
+			`Searching for: "${query}" (current count: ${newRestaurants.length}/${remainingCount})`
+		);
+
 		try {
 			const searchResults = await searchPlaces(query, apiKey, madridLocation);
 			console.log(`Found ${searchResults.length} results for query "${query}"`);
-			
+
 			// Process each place found
 			for (const place of searchResults) {
 				if (newRestaurants.length >= remainingCount) break;
@@ -294,10 +319,16 @@ export async function collectRestaurantsInMadrid(
 				if (!placeId || seenIds.has(placeId)) continue;
 
 				try {
-					console.log(`Fetching details for: ${place.displayName?.text} (${newRestaurants.length + 1}/${remainingCount})`);
+					console.log(
+						`Fetching details for: ${place.displayName?.text} (${newRestaurants.length + 1}/${remainingCount})`
+					);
 					const placeDetails = await fetchPlaceInfo(placeId, apiKey);
 					const restaurant = convertToRestaurant(placeDetails);
-					const reviews = extractReviews(placeDetails);
+					const reviews = extractReviews(
+						placeDetails,
+						userCounter,
+						userNameMap
+					);
 
 					newRestaurants.push(restaurant);
 					newReviews.push(...reviews);
@@ -308,13 +339,15 @@ export async function collectRestaurantsInMadrid(
 					// Add a small delay to avoid hitting API rate limits
 					await new Promise((resolve) => setTimeout(resolve, 300));
 				} catch (error) {
-					console.error(`Error fetching details for ${place.displayName?.text}:`, error);
+					console.error(
+						`Error fetching details for ${place.displayName?.text}:`,
+						error
+					);
 				}
 			}
-			
+
 			// Add a delay between queries to avoid rate limits
 			await new Promise((resolve) => setTimeout(resolve, 500));
-			
 		} catch (error) {
 			console.error(`Error with query "${query}":`, error);
 			// Wait longer if we hit an error (might be rate limiting)
@@ -322,24 +355,28 @@ export async function collectRestaurantsInMadrid(
 		}
 	}
 
-	console.log(`Completed search with ${newRestaurants.length} new unique restaurants.`);
-	
+	console.log(
+		`Completed search with ${newRestaurants.length} new unique restaurants.`
+	);
+
 	// Combine with existing data
 	const allRestaurants = [...existingRestaurants, ...newRestaurants];
 	const allReviews = [...existingReviews, ...newReviews];
-	
+
 	// Save the combined data
 	writeToCSV(allRestaurants, `${dataDir}/restaurants.csv`);
 	writeToCSV(allReviews, `${dataDir}/ratings.csv`);
-	
-	console.log(`Total: ${allRestaurants.length} restaurants with ${allReviews.length} reviews`);
-	
-	return { 
-		restaurants: allRestaurants, 
+
+	console.log(
+		`Total: ${allRestaurants.length} restaurants with ${allReviews.length} reviews`
+	);
+
+	return {
+		restaurants: allRestaurants,
 		reviews: allReviews,
 		newlyCollected: {
 			restaurants: newRestaurants.length,
-			reviews: newReviews.length
-		}
+			reviews: newReviews.length,
+		},
 	};
 }
