@@ -64,6 +64,10 @@ export async function analyzeReviewSentiment(
 
 	console.log(`Analyzing sentiment for ${reviews.length} reviews...`);
 
+	// Create a mapping for new unique review IDs
+	const reviewMap = new Map<string, string>();
+	let nextReviewId = 1;
+
 	for (let i = 0; i < reviews.length; i += batchSize) {
 		const batch = reviews.slice(i, i + batchSize);
 		console.log(
@@ -194,11 +198,16 @@ export async function analyzeReviewSentiment(
 				if (score < -0.5 && score >= -0.7) emotions.push("frustration");
 				if (score < -0.7) emotions.push("anger");
 
-				// Create review_id from user_id and restaurant_id
-				const review_id = `${review.user_id}_${review.restaurant_id}`;
+				// Create a unique review ID if we haven't seen this review
+				const key = `${review.user_id}_${review.restaurant_id}_${review.date}`;
+				if (!reviewMap.has(key)) {
+					reviewMap.set(key, `${nextReviewId++}`);
+				}
 
 				return {
-					review_id,
+					review_id: reviewMap.get(key)!,
+					user_id: review.user_id,                    // Keep the global user ID
+					restaurant_id: review.restaurant_id,        // Keep the restaurant ID
 					overall_score: sentiment?.score || 0,
 					overall_magnitude: sentiment?.magnitude || 0,
 					food_score: foodScore || 0,
